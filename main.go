@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -22,19 +21,24 @@ type writeTask struct {
 }
 
 type zipRequest struct {
-	Files  []string
-	Output string
+	Files []string
 }
 
 func main() {
 	r := mux.NewRouter()
-	r.HandleFunc("/zipfiles", handleZipCall).Methods("POST")
+	r.HandleFunc("/zip/create", handleZipRequest).Methods("POST")
+	r.HandleFunc("/zip/download", handleGetZip).Methods("GET")
 	http.Handle("/", r)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleZipCall(res http.ResponseWriter, req *http.Request) {
+func handleGetZip(res http.ResponseWriter, req *http.Request) {
+
+	res.WriteHeader(200)
+}
+
+func handleZipRequest(res http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	var p zipRequest
@@ -52,21 +56,22 @@ func handleZipCall(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	reqID := randString(24)
 	go func() {
-		err := downloadAndProcessFiles(p)
+		err := downloadAndProcessFiles(p, reqID)
 		if err != nil {
 			log.Println(err)
 		}
+
+		log.Println("Notify when this is done")
 	}()
 
-	res.WriteHeader(204)
-	res.Write([]byte("Received"))
+	res.WriteHeader(200)
+	res.Write([]byte(reqID))
 }
 
-func downloadAndProcessFiles(p zipRequest) error {
-	rand.Seed(time.Now().UnixNano())
-	zipName := randString(24)
-	output := p.Output + "/" + zipName + ".zip"
+func downloadAndProcessFiles(p zipRequest, filename string) error {
+	output := "/tmp/" + filename + ".zip"
 
 	newfile, err := os.Create(output)
 	if err != nil {
