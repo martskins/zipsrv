@@ -21,6 +21,11 @@ type writeTask struct {
 	url  string
 }
 
+type zipRequest struct {
+	Files  []string
+	Output string
+}
+
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/zipfiles", handleZipCall).Methods("POST")
@@ -32,33 +37,36 @@ func main() {
 func handleZipCall(res http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
-	input := struct {
-		Files []string
-	}{}
+	var p zipRequest
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
-		log.Println(err)
+		res.WriteHeader(400)
+		res.Write([]byte(err.Error()))
+		return
 	}
 
-	err = json.Unmarshal(body, &input)
+	err = json.Unmarshal(body, &p)
 	if err != nil {
-		log.Println(err)
+		res.WriteHeader(400)
+		res.Write([]byte(err.Error()))
+		return
 	}
 
 	go func() {
-		err := downloadAndProcessFiles(input.Files)
+		err := downloadAndProcessFiles(p)
 		if err != nil {
 			log.Println(err)
 		}
 	}()
 
-	res.WriteHeader(200)
+	res.WriteHeader(204)
+	res.Write([]byte("Received"))
 }
 
-func downloadAndProcessFiles(files []string) error {
+func downloadAndProcessFiles(p zipRequest) error {
 	rand.Seed(time.Now().UnixNano())
 	zipName := randString(24)
-	output := "/Users/martin/Desktop/" + zipName + ".zip"
+	output := p.Output + "/" + zipName + ".zip"
 
 	newfile, err := os.Create(output)
 	if err != nil {
@@ -72,8 +80,8 @@ func downloadAndProcessFiles(files []string) error {
 	tasks := make(chan writeTask)
 	var wg sync.WaitGroup
 
-	wg.Add(len(files))
-	go queueTasks(files, &wg, tasks)
+	wg.Add(len(p.Files))
+	go queueTasks(p.Files, &wg, tasks)
 	go func() {
 		wg.Wait()
 		close(tasks)
