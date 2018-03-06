@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
+	"github.com/martskins/zipsrv/internal/timer"
 )
 
 type writeTask struct {
@@ -27,18 +28,25 @@ type zipRequest struct {
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/zip/create", handleZipRequest).Methods("POST")
-	r.HandleFunc("/zip/download", handleGetZip).Methods("GET")
+	r.HandleFunc("/zip/download/{tkn}", handleGetZip).Methods("GET")
 	http.Handle("/", r)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func handleGetZip(res http.ResponseWriter, req *http.Request) {
+	vars := mux.Vars(req)
+	tkn := vars["tkn"]
 
-	res.WriteHeader(200)
+	res.Header().Set("Content-Type", "application/zip")
+	res.Header().Set("Content-Disposition", "attachment; filename=result.zip")
+
+	http.ServeFile(res, req, "/tmp/"+tkn+".zip")
 }
 
 func handleZipRequest(res http.ResponseWriter, req *http.Request) {
+	stopTimer := timer.Timer("handleZipRequest")
+	defer stopTimer()
 	defer req.Body.Close()
 
 	var p zipRequest
@@ -58,7 +66,7 @@ func handleZipRequest(res http.ResponseWriter, req *http.Request) {
 
 	reqID := randString(24)
 	go func() {
-		err := downloadAndProcessFiles(p, reqID)
+		err := processFiles(p, reqID)
 		if err != nil {
 			log.Println(err)
 		}
@@ -70,7 +78,9 @@ func handleZipRequest(res http.ResponseWriter, req *http.Request) {
 	res.Write([]byte(reqID))
 }
 
-func downloadAndProcessFiles(p zipRequest, filename string) error {
+func processFiles(p zipRequest, filename string) error {
+	stopTimer := timer.Timer("processFiles")
+	defer stopTimer()
 	output := "/tmp/" + filename + ".zip"
 
 	newfile, err := os.Create(output)
@@ -103,6 +113,8 @@ func downloadAndProcessFiles(p zipRequest, filename string) error {
 }
 
 func queueTasks(files []string, wg *sync.WaitGroup, ch chan writeTask) {
+	stopTimer := timer.Timer("queueTasks")
+	defer stopTimer()
 	for _, u := range files {
 		go func(url string) {
 			resp, err := getFile(url)
@@ -117,6 +129,8 @@ func queueTasks(files []string, wg *sync.WaitGroup, ch chan writeTask) {
 }
 
 func writeFile(zipWriter *zip.Writer, t writeTask) error {
+	stopTimer := timer.Timer("writeFile")
+	defer stopTimer()
 	defer t.resp.Body.Close()
 
 	parts := strings.Split(t.url, "/")
