@@ -2,30 +2,65 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
 )
 
-var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-func main() {
-	files := []string{"https://cloud.netlifyusercontent.com/assets/344dbf88-fdf9-42bb-adb4-46f01eedd629/68dd54ca-60cf-4ef7-898b-26d7cbe48ec7/10-dithering-opt.jpg"}
-	zipName := randStringRunes(24)
-	output := "/Users/martin/Desktop/" + zipName + ".zip"
-
-	err := zipFiles(output, files)
-	if err != nil {
-		log.Fatal(err)
-	}
+type writeTask struct {
+	resp *http.Response
+	url  string
 }
 
-func zipFiles(filename string, files []string) error {
-	var err error
-	newfile, err := os.Create(filename)
+func main() {
+	r := mux.NewRouter()
+	r.HandleFunc("/zipfiles", handleZipCall).Methods("POST")
+	http.Handle("/", r)
+
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func handleZipCall(res http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+
+	input := struct {
+		Files []string
+	}{}
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Println(err)
+	}
+
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Println(err)
+	}
+
+	go func() {
+		err := downloadAndProcessFiles(input.Files)
+		if err != nil {
+			log.Println(err)
+		}
+	}()
+
+	res.WriteHeader(200)
+}
+
+func downloadAndProcessFiles(files []string) error {
+	rand.Seed(time.Now().UnixNano())
+	zipName := randString(24)
+	output := "/Users/martin/Desktop/" + zipName + ".zip"
+
+	newfile, err := os.Create(output)
 	if err != nil {
 		return err
 	}
@@ -34,30 +69,71 @@ func zipFiles(filename string, files []string) error {
 	zipWriter := zip.NewWriter(newfile)
 	defer zipWriter.Close()
 
-	for _, path := range files {
-		resp, err := http.Get(path)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
+	tasks := make(chan writeTask)
+	var wg sync.WaitGroup
 
-		parts := strings.Split(path, "/")
-		fn := parts[len(parts)-1]
-		w, err := zipWriter.Create(fn)
-		if err != nil {
-			return err
-		}
+	wg.Add(len(files))
+	go queueTasks(files, &wg, tasks)
+	go func() {
+		wg.Wait()
+		close(tasks)
+	}()
 
-		_, err = io.Copy(w, resp.Body)
+	for t := range tasks {
+		err = writeFile(zipWriter, t)
 		if err != nil {
-			return err
+			log.Fatal(err)
 		}
 	}
 
 	return nil
 }
 
-func randStringRunes(n int) string {
+func queueTasks(files []string, wg *sync.WaitGroup, ch chan writeTask) {
+	for _, u := range files {
+		go func(url string) {
+			resp, err := getFile(url)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			ch <- writeTask{resp, url}
+			(*wg).Done()
+		}(u)
+	}
+}
+
+func writeFile(zipWriter *zip.Writer, t writeTask) error {
+	defer t.resp.Body.Close()
+
+	parts := strings.Split(t.url, "/")
+	fn := parts[len(parts)-1]
+
+	w, err := zipWriter.Create(fn)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, t.resp.Body)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func getFile(url string) (*http.Response, error) {
+	var err error
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func randString(n int) string {
+	var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	b := make([]rune, n)
 	for i := range b {
 		b[i] = letterRunes[rand.Intn(len(letterRunes))]
