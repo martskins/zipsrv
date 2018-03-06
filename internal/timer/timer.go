@@ -10,6 +10,6 @@ func Timer(funcName string) func() {
 
 	return func() {
 		t := time.Since(a).Nanoseconds()
-		log.Printf("%s took %v nanoseconds", funcName, t)
+		log.Printf("%s took %v nanoseconds \n", funcName, t)
 	}
 }
