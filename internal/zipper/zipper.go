@@ -9,24 +9,17 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/martskins/zipsrv/internal/timer"
+	"github.com/martskins/zipsrv/internal/types"
 )
 
-type writeTask struct {
-	resp *http.Response
-	url  string
+func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
 }
 
-type zipRequest struct {
-	Files []string
-}
-
-func ProcessFiles(p zipRequest, filename string) error {
-	stopTimer := timer.Timer("processFiles")
-	defer stopTimer()
+func ProcessFiles(p types.ZipRequest, filename string, workers int) error {
 	output := "/tmp/" + filename + ".zip"
-
 	newfile, err := os.Create(output)
 	if err != nil {
 		return err
@@ -36,48 +29,58 @@ func ProcessFiles(p zipRequest, filename string) error {
 	zipWriter := zip.NewWriter(newfile)
 	defer zipWriter.Close()
 
-	tasks := make(chan writeTask)
-	var wg sync.WaitGroup
+	wCh := make(chan types.WriteTask)
+	dCh := make(chan string, workers)
 
+	var wg sync.WaitGroup
 	wg.Add(len(p.Files))
-	go queueTasks(p.Files, &wg, tasks)
+
+	for w := 0; w < workers; w++ {
+		go downloadWorker(&wg, dCh, wCh)
+	}
+	go scheduleDownloads(p, dCh)
+
 	go func() {
 		wg.Wait()
-		close(tasks)
+		close(wCh)
 	}()
 
-	for t := range tasks {
-		err = writeFile(zipWriter, t)
+	writerWorker(zipWriter, wCh)
+	return nil
+}
+
+func scheduleDownloads(p types.ZipRequest, dCh chan string) {
+	for _, f := range p.Files {
+		dCh <- f
+	}
+	close(dCh)
+}
+
+func writerWorker(zipWriter *zip.Writer, wCh chan types.WriteTask) {
+	for t := range wCh {
+		err := WriteFile(zipWriter, t)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
-
-	return nil
 }
 
-func QueueTasks(files []string, wg *sync.WaitGroup, ch chan writeTask) {
-	stopTimer := timer.Timer("queueTasks")
-	defer stopTimer()
-	for _, u := range files {
-		go func(url string) {
-			resp, err := getFile(url)
-			if err != nil {
-				log.Fatal(err)
-			}
+func downloadWorker(wg *sync.WaitGroup, dCh chan string, wCh chan types.WriteTask) {
+	for url := range dCh {
+		resp, err := GetFile(url)
+		if err != nil {
+			log.Fatal(err)
+		}
 
-			ch <- writeTask{resp, url}
-			(*wg).Done()
-		}(u)
+		wCh <- types.WriteTask{resp, url}
+		(*wg).Done()
 	}
 }
 
-func WriteFile(zipWriter *zip.Writer, t writeTask) error {
-	stopTimer := timer.Timer("writeFile")
-	defer stopTimer()
-	defer t.resp.Body.Close()
+func WriteFile(zipWriter *zip.Writer, t types.WriteTask) error {
+	defer t.Resp.Body.Close()
 
-	parts := strings.Split(t.url, "/")
+	parts := strings.Split(t.URL, "/")
 	fn := parts[len(parts)-1]
 
 	w, err := zipWriter.Create(fn)
@@ -85,7 +88,7 @@ func WriteFile(zipWriter *zip.Writer, t writeTask) error {
 		return err
 	}
 
-	_, err = io.Copy(w, t.resp.Body)
+	_, err = io.Copy(w, t.Resp.Body)
 	if err != nil {
 		return err
 	}
@@ -101,13 +104,4 @@ func GetFile(url string) (*http.Response, error) {
 	}
 
 	return resp, nil
-}
-
-func RandString(n int) string {
-	var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
-	}
-	return string(b)
 }

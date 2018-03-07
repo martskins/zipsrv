@@ -7,7 +7,9 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/martskins/zipsrv/internal/randstring"
 	"github.com/martskins/zipsrv/internal/timer"
+	"github.com/martskins/zipsrv/internal/types"
 	"github.com/martskins/zipsrv/internal/zipper"
 )
 
@@ -26,7 +28,7 @@ func HandleZipRequest(res http.ResponseWriter, req *http.Request) {
 	defer stopTimer()
 	defer req.Body.Close()
 
-	var p zipRequest
+	var p types.ZipRequest
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		res.WriteHeader(400)
@@ -41,9 +43,9 @@ func HandleZipRequest(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	reqID := zipper.RandString(24)
+	reqID := randstring.New(24)
 	go func() {
-		err := zipper.ProcessFiles(p, reqID)
+		err := zipper.ProcessFiles(p, reqID, 100)
 		if err != nil {
 			log.Println(err)
 		}
