@@ -4,19 +4,13 @@ import (
 	"archive/zip"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/martskins/zipsrv/internal/types"
 )
-
-func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
-}
 
 func ProcessFiles(p types.ZipRequest, filename string, workers int) error {
 	output := "/tmp/" + filename + ".zip"
@@ -31,7 +25,6 @@ func ProcessFiles(p types.ZipRequest, filename string, workers int) error {
 
 	wCh := make(chan types.WriteTask)
 	dCh := make(chan string, workers)
-
 	var wg sync.WaitGroup
 	wg.Add(len(p.Files))
 
